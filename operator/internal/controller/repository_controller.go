@@ -107,6 +107,10 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	})
 
 	if err := r.Status().Update(ctx, &repo); err != nil {
+		if apierrors.IsConflict(err) {
+			logger.V(1).Info("Repository status update conflicted, requeueing")
+			return ctrl.Result{Requeue: true}, nil
+		}
 		logger.Error(err, "Could not update Repository status")
 		return ctrl.Result{}, err
 	}
@@ -186,7 +190,13 @@ func (r *RepositoryReconciler) markSyncFailed(ctx context.Context, repo *agentsw
 		Message:            message,
 		ObservedGeneration: repo.Generation,
 	})
-	return r.Status().Update(ctx, repo)
+	if err := r.Status().Update(ctx, repo); err != nil {
+		if apierrors.IsConflict(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // syncIssues materializes each fetched GitHub issue into an Issue CR.
