@@ -7,16 +7,36 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// RepositorySpec defines the desired state of Repository
+// RepositorySpec defines the desired state of Repository.
 type RepositorySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// Owner is the GitHub owner (user or org) of the repository to sync.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Owner string `json:"owner"`
 
-	// foo is an example field of Repository. Edit repository_types.go to remove/update
+	// Repo is the GitHub repository name (the part after `<owner>/`).
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Repo string `json:"repo"`
+
+	// SyncIntervalSeconds is how often to poll GitHub for issues.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// +kubebuilder:default=60
+	// +kubebuilder:validation:Minimum=30
+	SyncIntervalSeconds int32 `json:"syncIntervalSeconds,omitempty"`
+
+	// SecretRef points to a Secret in the same namespace carrying GitHub App
+	// credentials. Required keys: appId, installationId, privateKey.
+	// +required
+	SecretRef LocalSecretReference `json:"secretRef"`
+}
+
+// LocalSecretReference references a Secret in the same namespace as the referrer.
+type LocalSecretReference struct {
+	// Name of the Secret.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // RepositoryStatus defines the observed state of Repository.

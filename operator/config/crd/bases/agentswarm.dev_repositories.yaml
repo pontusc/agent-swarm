@@ -39,10 +39,37 @@ spec:
           spec:
             description: spec defines the desired state of Repository
             properties:
-              foo:
-                description: foo is an example field of Repository. Edit repository_types.go
-                  to remove/update
+              owner:
+                description: Owner is the GitHub owner (user or org) of the repository
+                  to sync.
+                minLength: 1
                 type: string
+              repo:
+                description: Repo is the GitHub repository name (the part after `<owner>/`).
+                minLength: 1
+                type: string
+              secretRef:
+                description: |-
+                  SecretRef points to a Secret in the same namespace carrying GitHub App
+                  credentials. Required keys: appId, installationId, privateKey.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              syncIntervalSeconds:
+                default: 60
+                description: SyncIntervalSeconds is how often to poll GitHub for issues.
+                format: int32
+                minimum: 30
+                type: integer
+            required:
+            - owner
+            - repo
+            - secretRef
             type: object
           status:
             description: status defines the observed state of Repository
