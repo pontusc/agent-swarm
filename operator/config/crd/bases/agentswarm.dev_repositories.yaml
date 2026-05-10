@@ -14,7 +14,20 @@ spec:
     singular: repository
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .spec.repo
+      name: Repo
+      type: string
+    - jsonPath: .status.observedIssueCount
+      name: Issues
+      type: integer
+    - jsonPath: .status.lastSyncTime
+      name: Last-Sync
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Repository is the Schema for the repositories API
@@ -76,15 +89,8 @@ spec:
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the Repository resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  Conditions represent the current state of the Repository resource.
+                  Standard type: "Synced" (True after a successful poll; False with Reason set on error).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -143,6 +149,23 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastSyncTime:
+                description: |-
+                  LastSyncTime is the timestamp of the last successful GitHub poll.
+                  Nil if the Repository has never been synced.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the most recent .metadata.generation observed by the controller.
+                  Clients can compare this to .metadata.generation to tell whether status reflects current spec.
+                format: int64
+                type: integer
+              observedIssueCount:
+                description: ObservedIssueCount is the number of open GitHub issues
+                  observed at the last successful sync.
+                format: int32
+                type: integer
             type: object
         required:
         - spec

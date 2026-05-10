@@ -11,7 +11,7 @@ fi
 PROFILE="${OVERRIDE_PROFILE:=agent-swarm}"
 
 if minikube status --profile="$PROFILE" > /dev/null; then
-  echo "🛑  Cluster '$PROFILE' already running"
+  echo "Cluster '$PROFILE' already running"
   exit 0
 fi
 
@@ -31,4 +31,4 @@ done
 echo "🏃  Starting registry proxy"
 docker run -d --name minikube-registry-proxy --network=host alpine ash -c "apk add socat && socat TCP-LISTEN:5000,reuseaddr,fork TCP:$(minikube ip):5000" > /dev/null
 
-echo "🏓  Ready!"
+echo "Ready!"

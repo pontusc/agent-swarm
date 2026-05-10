@@ -41,21 +41,22 @@ type LocalSecretReference struct {
 
 // RepositoryStatus defines the observed state of Repository.
 type RepositoryStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// ObservedGeneration is the most recent .metadata.generation observed by the controller.
+	// Clients can compare this to .metadata.generation to tell whether status reflects current spec.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// LastSyncTime is the timestamp of the last successful GitHub poll.
+	// Nil if the Repository has never been synced.
+	// +optional
+	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
 
-	// conditions represent the current state of the Repository resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// ObservedIssueCount is the number of open GitHub issues observed at the last successful sync.
+	// +optional
+	ObservedIssueCount int32 `json:"observedIssueCount,omitempty"`
+
+	// Conditions represent the current state of the Repository resource.
+	// Standard type: "Synced" (True after a successful poll; False with Reason set on error).
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -64,6 +65,10 @@ type RepositoryStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Owner",type="string",JSONPath=".spec.owner"
+// +kubebuilder:printcolumn:name="Repo",type="string",JSONPath=".spec.repo"
+// +kubebuilder:printcolumn:name="Issues",type="integer",JSONPath=".status.observedIssueCount"
+// +kubebuilder:printcolumn:name="Last-Sync",type="date",JSONPath=".status.lastSyncTime"
 
 // Repository is the Schema for the repositories API
 type Repository struct {

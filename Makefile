@@ -1,6 +1,9 @@
 .PHONY: setup start-minikube stop-minikube
 # ---
 setup: start-minikube
+	@kubectl apply -f .secrets/github-app.yml
+	@$(MAKE) -C operator install
+	@kubectl apply -k operator/config/samples
 
 # --- Minikube related
 start-minikube:
