@@ -12,6 +12,14 @@ type Issue struct {
 	State string
 }
 
+// PullRequest is the operator's minimal view of a GitHub pull request used by
+// IssueController to detect merge completion.
+type PullRequest struct {
+	Number int32
+	State  string
+	Merged bool
+}
+
 // AppCreds carries the secrets needed to authenticate as a GitHub App
 // installation. The reconciler reads these from the Secret referenced by
 // Repository.spec.secretRef.

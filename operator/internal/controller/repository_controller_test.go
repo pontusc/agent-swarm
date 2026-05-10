@@ -30,6 +30,10 @@ func (f *fakeGitHubClient) ListIssues(_ context.Context, _, _ string) ([]githubc
 	return f.issues, nil
 }
 
+func (f *fakeGitHubClient) GetPullRequest(_ context.Context, _, _ string, _ int32) (githubclient.PullRequest, error) {
+	return githubclient.PullRequest{}, nil
+}
+
 var _ = Describe("Repository Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"

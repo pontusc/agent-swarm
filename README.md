@@ -76,8 +76,8 @@ cd operator/ && make install deploy            # install CRDs + deploy operator 
   - Operator reads results, pushes branch, opens PR, and updates `Issue.status`.
 - Issue phase state machine (current + near-term):
   - `Pending` -> `PreparingWorkspace` -> `WorkspaceReady` -> `AgentRunning` -> `PublishPending`
+  - `PublishPending` -> `PRCreated` -> `Done` (when PR merge is detected)
   - any stage can transition to `Failed`
-  - planned next: `PublishPending` -> `PRCreated` -> `Done`
 
 ## More
 

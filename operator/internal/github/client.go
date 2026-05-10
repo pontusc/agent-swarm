@@ -18,6 +18,8 @@ type Client interface {
 	// ListIssues returns OPEN issues for owner/repo. Pull requests are filtered
 	// out (GitHub's REST endpoint conflates them).
 	ListIssues(ctx context.Context, owner, repo string) ([]Issue, error)
+	// GetPullRequest returns pull request state for owner/repo + number.
+	GetPullRequest(ctx context.Context, owner, repo string, number int32) (PullRequest, error)
 }
 
 // NewClient builds a real GitHub client backed by go-github + ghinstallation.
@@ -56,6 +58,19 @@ func (c *client) ListIssues(ctx context.Context, owner, repo string) ([]Issue, e
 		opt.ListOptions.Page = resp.NextPage
 	}
 	return out, nil
+}
+
+func (c *client) GetPullRequest(ctx context.Context, owner, repo string, number int32) (PullRequest, error) {
+	pr, _, err := c.gh.PullRequests.Get(ctx, owner, repo, int(number))
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("get pull request %s/%s#%d: %w", owner, repo, number, err)
+	}
+
+	return PullRequest{
+		Number: int32(pr.GetNumber()),
+		State:  pr.GetState(),
+		Merged: pr.GetMerged(),
+	}, nil
 }
 
 func fromGoGitHub(i *gogithub.Issue) Issue {

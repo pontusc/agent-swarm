@@ -16,18 +16,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	agentswarmv1alpha1 "github.com/pontuscurtsson/agent-swarm/operator/api/v1alpha1"
+	githubclient "github.com/pontuscurtsson/agent-swarm/operator/internal/github"
 )
 
 // IssueReconciler reconciles an Issue object.
 type IssueReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme          *runtime.Scheme
+	newGitHubClient func(creds githubclient.AppCreds) (githubclient.Client, error)
 }
 
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=issues,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=issues/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=issues/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
@@ -42,6 +45,22 @@ func (r *IssueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	var issue agentswarmv1alpha1.Issue
 	if err := r.Get(ctx, req.NamespacedName, &issue); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if issue.Status.Phase == agentswarmv1alpha1.IssuePhaseDone {
+		return ctrl.Result{}, nil
+	}
+
+	if issue.Status.Phase == agentswarmv1alpha1.IssuePhasePRCreated {
+		repo, err := r.getOwningRepository(ctx, &issue)
+		if err != nil {
+			if markErr := r.markIssueFailed(ctx, &issue, "OwnerResolutionError", err.Error()); markErr != nil {
+				return ctrl.Result{}, markErr
+			}
+			logger.Error(err, "Could not resolve owning Repository")
+			return ctrl.Result{}, nil
+		}
+		return r.reconcilePullRequestStatus(ctx, &issue, repo)
 	}
 
 	if issue.Spec.State != agentswarmv1alpha1.IssueStateOpen {
