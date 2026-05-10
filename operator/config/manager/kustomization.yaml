@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: localhost:5000/agent-swarm/operator
-  newTag: dev
+  newTag: latest
