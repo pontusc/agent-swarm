@@ -240,7 +240,9 @@ if [ -z "$PR_URL" ]; then
     --arg title "agent-swarm: issue #${ISSUE_NUMBER}" \
     --arg head "$BRANCH" \
     --arg base "$BASE_BRANCH" \
-    --arg body "Automated mock-agent PR for issue #${ISSUE_NUMBER}" \
+    --arg body "Automated mock-agent PR for issue #${ISSUE_NUMBER}
+
+Closes #${ISSUE_NUMBER}" \
     '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true}')
 
   CREATED=$(curl -sS -X POST \
