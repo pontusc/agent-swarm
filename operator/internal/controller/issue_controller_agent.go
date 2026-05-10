@@ -148,5 +148,5 @@ printf 'mock agent touched workspace\n' >> /workspace/repo/.agent-mock-output`,
 
 // mockAgentPodName keeps mock agent pod naming deterministic per issue.
 func mockAgentPodName(issue *agentswarmv1alpha1.Issue) string {
-	return fmt.Sprintf("%s-agent-mock", issue.Name)
+	return fmt.Sprintf("agent-mock-%s", issue.Name)
 }

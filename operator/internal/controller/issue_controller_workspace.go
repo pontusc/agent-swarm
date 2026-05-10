@@ -158,7 +158,7 @@ func workspacePVCName(issue *agentswarmv1alpha1.Issue) string {
 
 // workspacePrepJobName keeps prep Job naming deterministic and idempotent.
 func workspacePrepJobName(issue *agentswarmv1alpha1.Issue) string {
-	return fmt.Sprintf("%s-prep", issue.Name)
+	return fmt.Sprintf("prep-%s", issue.Name)
 }
 
 // branchName defines the branch namespace used for agent work on an issue.
