@@ -21,6 +21,9 @@ spec:
     - jsonPath: .spec.state
       name: State
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .spec.title
       name: Title
       priority: 1
@@ -81,6 +84,14 @@ spec:
           status:
             description: status defines the observed state of Issue
             properties:
+              agentPodName:
+                description: AgentPodName will point to the assigned agent pod (Phase
+                  2).
+                type: string
+              branch:
+                description: Branch is the branch prepared for this issue's agent
+                  workflow.
+                type: string
               conditions:
                 description: Conditions represent the current state of the Issue resource.
                 items:
@@ -141,11 +152,37 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastError:
+                description: LastError is the latest reconciliation/runtime error
+                  for this issue.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the most recent .metadata.generation
                   observed by the controller.
                 format: int64
                 type: integer
+              phase:
+                description: Phase describes where this issue is in the execution
+                  pipeline.
+                type: string
+              prUrl:
+                description: PRURL will point to the pull request opened for this
+                  issue (Phase 2).
+                type: string
+              prepJobName:
+                description: PrepJobName is the Job that clones the repository and
+                  creates the branch.
+                type: string
+              prepRetries:
+                description: |-
+                  PrepRetries is how many times workspace preparation has been retried.
+                  Max retries are controller-defined.
+                format: int32
+                type: integer
+              workspacePVC:
+                description: WorkspacePVC is the name of the PVC holding the per-issue
+                  workspace.
+                type: string
             type: object
         required:
         - spec

@@ -49,6 +49,39 @@ type IssueStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// Phase describes where this issue is in the execution pipeline.
+	// +optional
+	Phase IssuePhase `json:"phase,omitempty"`
+
+	// Branch is the branch prepared for this issue's agent workflow.
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// WorkspacePVC is the name of the PVC holding the per-issue workspace.
+	// +optional
+	WorkspacePVC string `json:"workspacePVC,omitempty"`
+
+	// PrepJobName is the Job that clones the repository and creates the branch.
+	// +optional
+	PrepJobName string `json:"prepJobName,omitempty"`
+
+	// PrepRetries is how many times workspace preparation has been retried.
+	// Max retries are controller-defined.
+	// +optional
+	PrepRetries int32 `json:"prepRetries,omitempty"`
+
+	// AgentPodName will point to the assigned agent pod (Phase 2).
+	// +optional
+	AgentPodName string `json:"agentPodName,omitempty"`
+
+	// PRURL will point to the pull request opened for this issue (Phase 2).
+	// +optional
+	PRURL string `json:"prUrl,omitempty"`
+
+	// LastError is the latest reconciliation/runtime error for this issue.
+	// +optional
+	LastError string `json:"lastError,omitempty"`
+
 	// Conditions represent the current state of the Issue resource.
 	// +listType=map
 	// +listMapKey=type
@@ -56,10 +89,21 @@ type IssueStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// IssuePhase is the high-level stage of issue handling.
+type IssuePhase string
+
+const (
+	IssuePhasePending            IssuePhase = "Pending"
+	IssuePhasePreparingWorkspace IssuePhase = "PreparingWorkspace"
+	IssuePhaseWorkspaceReady     IssuePhase = "WorkspaceReady"
+	IssuePhaseFailed             IssuePhase = "Failed"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Number",type="integer",JSONPath=".spec.number"
 // +kubebuilder:printcolumn:name="State",type="string",JSONPath=".spec.state"
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Title",type="string",JSONPath=".spec.title",priority=1
 
 // Issue is the Schema for the issues API

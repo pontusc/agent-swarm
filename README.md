@@ -66,6 +66,15 @@ kubectl apply -f .secrets/github-app.yml       # GitHub App credentials Secret
 cd operator/ && make install deploy            # install CRDs + deploy operator (when ready)
 ```
 
+## Pending behavior notes
+
+- Issue lifecycle policy (planned): do not auto-close/remove `Issue` CRs on GitHub close; only transition/close when the matching PR is merged.
+- Phase 2 agent flow (draft):
+  - `IssueController` detects unassigned `Issue` and allocates work.
+  - Operator prepares a per-issue workspace in a PVC by cloning repo + creating branch using GitHub App credentials.
+  - Agent pod mounts only the prepared workspace PVC (no GitHub credentials in the pod), performs edits, and exits with artifacts/status.
+  - Operator reads results, pushes branch, opens PR, and updates `Issue.status`.
+
 ## More
 
 - `CLAUDE.md` — project-specific working notes (phases, conventions, scope)
