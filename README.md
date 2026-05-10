@@ -74,6 +74,10 @@ cd operator/ && make install deploy            # install CRDs + deploy operator 
   - Operator prepares a per-issue workspace in a PVC by cloning repo + creating branch using GitHub App credentials.
   - Agent pod mounts only the prepared workspace PVC (no GitHub credentials in the pod), performs edits, and exits with artifacts/status.
   - Operator reads results, pushes branch, opens PR, and updates `Issue.status`.
+- Issue phase state machine (current + near-term):
+  - `Pending` -> `PreparingWorkspace` -> `WorkspaceReady` -> `AgentRunning` -> `PublishPending`
+  - any stage can transition to `Failed`
+  - planned next: `PublishPending` -> `PRCreated` -> `Done`
 
 ## More
 
