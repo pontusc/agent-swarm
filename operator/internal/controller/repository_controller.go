@@ -2,24 +2,37 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	agentswarmv1alpha1 "github.com/pontuscurtsson/agent-swarm/operator/api/v1alpha1"
+	githubclient "github.com/pontuscurtsson/agent-swarm/operator/internal/github"
 )
 
 // RepositoryReconciler reconciles a Repository object
 type RepositoryReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme          *runtime.Scheme
+	// newGitHubClient allows tests to inject a fake client and avoid network calls.
+	newGitHubClient func(creds githubclient.AppCreds) (githubclient.Client, error)
 }
 
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -31,11 +44,139 @@ type RepositoryReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var repo agentswarmv1alpha1.Repository
+	if err := r.Get(ctx, req.NamespacedName, &repo); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	return ctrl.Result{}, nil
+	creds, err := r.loadCreds(ctx, &repo)
+	if err != nil {
+		if markErr := r.markSyncFailed(ctx, &repo, "SecretLoadError", err.Error()); markErr != nil {
+			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)
+		}
+		logger.Error(err, "Could not load GitHub App credentials", "secretName", repo.Spec.SecretRef.Name)
+		return ctrl.Result{}, err
+	}
+
+	newGitHubClient := r.newGitHubClient
+	if newGitHubClient == nil {
+		// Production path: use the real GitHub App-backed client.
+		newGitHubClient = githubclient.NewClient
+	}
+
+	ghClient, err := newGitHubClient(creds)
+	if err != nil {
+		if markErr := r.markSyncFailed(ctx, &repo, "ClientInitError", err.Error()); markErr != nil {
+			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)
+		}
+		logger.Error(err, "Could not create GitHub client")
+		return ctrl.Result{}, err
+	}
+
+	issues, err := ghClient.ListIssues(ctx, repo.Spec.Owner, repo.Spec.Repo)
+	if err != nil {
+		if markErr := r.markSyncFailed(ctx, &repo, "GitHubAPIError", err.Error()); markErr != nil {
+			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)
+		}
+		logger.Error(err, "Could not list repository issues", "owner", repo.Spec.Owner, "repo", repo.Spec.Repo)
+		return ctrl.Result{}, err
+	}
+
+	now := metav1.Now()
+	repo.Status.ObservedGeneration = repo.Generation
+	repo.Status.LastSyncTime = &now
+	repo.Status.ObservedIssueCount = int32(len(issues))
+	meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:               "Synced",
+		Status:             metav1.ConditionTrue,
+		Reason:             "SyncSucceeded",
+		Message:            "Repository issues synced successfully",
+		ObservedGeneration: repo.Generation,
+	})
+
+	if err := r.Status().Update(ctx, &repo); err != nil {
+		logger.Error(err, "Could not update Repository status")
+		return ctrl.Result{}, err
+	}
+
+	logger.Info("Synced Repository", "observedIssueCount", len(issues))
+	return ctrl.Result{RequeueAfter: time.Duration(repo.Spec.SyncIntervalSeconds) * time.Second}, nil
+}
+
+// loadCreds reads the GitHub App credentials referenced by Repository.spec.secretRef.
+// We parse app/installation IDs as integers because ghinstallation expects numeric IDs,
+// while Secret values are always stored as bytes.
+func (r *RepositoryReconciler) loadCreds(ctx context.Context, repo *agentswarmv1alpha1.Repository) (githubclient.AppCreds, error) {
+	secretName := types.NamespacedName{Namespace: repo.Namespace, Name: repo.Spec.SecretRef.Name}
+
+	var secret corev1.Secret
+	if err := r.Get(ctx, secretName, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return githubclient.AppCreds{}, fmt.Errorf("secret %q not found", secretName.String())
+		}
+		return githubclient.AppCreds{}, fmt.Errorf("get secret %q: %w", secretName.String(), err)
+	}
+
+	appID, err := parseRequiredInt64(secret.Data, "appId")
+	if err != nil {
+		return githubclient.AppCreds{}, fmt.Errorf("secret %q: %w", secretName.String(), err)
+	}
+
+	installationID, err := parseRequiredInt64(secret.Data, "installationId")
+	if err != nil {
+		return githubclient.AppCreds{}, fmt.Errorf("secret %q: %w", secretName.String(), err)
+	}
+
+	privateKeyPEM, ok := secret.Data["privateKey"]
+	if !ok {
+		return githubclient.AppCreds{}, fmt.Errorf("missing key %q", "privateKey")
+	}
+	if len(privateKeyPEM) == 0 {
+		return githubclient.AppCreds{}, fmt.Errorf("key %q must not be empty", "privateKey")
+	}
+
+	return githubclient.AppCreds{
+		AppID:          appID,
+		InstallationID: installationID,
+		PrivateKeyPEM:  privateKeyPEM,
+	}, nil
+}
+
+// parseRequiredInt64 validates that a required Secret key exists and contains a
+// base-10 integer value. This keeps Secret shape errors explicit and user-facing.
+func parseRequiredInt64(data map[string][]byte, key string) (int64, error) {
+	raw, ok := data[key]
+	if !ok {
+		return 0, fmt.Errorf("missing key %q", key)
+	}
+
+	value := strings.TrimSpace(string(raw))
+	if value == "" {
+		return 0, fmt.Errorf("key %q must not be empty", key)
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %q as int64: %w", key, err)
+	}
+
+	return parsed, nil
+}
+
+// markSyncFailed centralizes Synced=False condition updates for all reconcile
+// failure paths so callers set a consistent type/reason/message shape.
+func (r *RepositoryReconciler) markSyncFailed(ctx context.Context, repo *agentswarmv1alpha1.Repository, reason, message string) error {
+	repo.Status.ObservedGeneration = repo.Generation
+	meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:               "Synced",
+		Status:             metav1.ConditionFalse,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: repo.Generation,
+	})
+	return r.Status().Update(ctx, repo)
 }
 
 // SetupWithManager sets up the controller with the Manager.

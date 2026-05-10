@@ -35,7 +35,11 @@ var _ = Describe("Issue Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: agentswarmv1alpha1.IssueSpec{
+						Number: 1,
+						Title:  "test issue",
+						State:  agentswarmv1alpha1.IssueStateOpen,
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
