@@ -126,6 +126,17 @@ var _ = Describe("Repository Controller", func() {
 			Expect(syncedCondition).NotTo(BeNil())
 			Expect(syncedCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(syncedCondition.Reason).To(Equal("SyncSucceeded"))
+
+			issueCR := &agentswarmv1alpha1.Issue{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName + "-1", Namespace: "default"}, issueCR)).To(Succeed())
+			Expect(issueCR.Spec.Number).To(Equal(int32(1)))
+			Expect(issueCR.Spec.Title).To(Equal("Bug"))
+			Expect(issueCR.Spec.State).To(Equal(agentswarmv1alpha1.IssueStateOpen))
+
+			owner := metav1.GetControllerOf(issueCR)
+			Expect(owner).NotTo(BeNil())
+			Expect(owner.Kind).To(Equal("Repository"))
+			Expect(owner.Name).To(Equal(resourceName))
 		})
 	})
 })

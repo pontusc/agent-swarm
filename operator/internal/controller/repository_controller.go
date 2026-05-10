@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	agentswarmv1alpha1 "github.com/pontuscurtsson/agent-swarm/operator/api/v1alpha1"
@@ -24,7 +26,7 @@ import (
 // RepositoryReconciler reconciles a Repository object
 type RepositoryReconciler struct {
 	client.Client
-	Scheme          *runtime.Scheme
+	Scheme *runtime.Scheme
 	// newGitHubClient allows tests to inject a fake client and avoid network calls.
 	newGitHubClient func(creds githubclient.AppCreds) (githubclient.Client, error)
 }
@@ -32,6 +34,7 @@ type RepositoryReconciler struct {
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories/finalizers,verbs=update
+// +kubebuilder:rbac:groups=agentswarm.dev,resources=issues,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -81,6 +84,13 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)
 		}
 		logger.Error(err, "Could not list repository issues", "owner", repo.Spec.Owner, "repo", repo.Spec.Repo)
+		return ctrl.Result{}, err
+	}
+	if err := r.syncIssues(ctx, &repo, issues); err != nil {
+		if markErr := r.markSyncFailed(ctx, &repo, "IssueSyncError", err.Error()); markErr != nil {
+			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)
+		}
+		logger.Error(err, "Could not sync child Issue resources")
 		return ctrl.Result{}, err
 	}
 
@@ -179,10 +189,83 @@ func (r *RepositoryReconciler) markSyncFailed(ctx context.Context, repo *agentsw
 	return r.Status().Update(ctx, repo)
 }
 
+// syncIssues materializes each fetched GitHub issue into an Issue CR.
+func (r *RepositoryReconciler) syncIssues(ctx context.Context, repo *agentswarmv1alpha1.Repository, issues []githubclient.Issue) error {
+	for _, issue := range issues {
+		if err := r.upsertIssue(ctx, repo, issue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// upsertIssue keeps one deterministic Issue CR (<repository-name>-<issue-number>)
+// in sync with the latest GitHub issue payload.
+func (r *RepositoryReconciler) upsertIssue(ctx context.Context, repo *agentswarmv1alpha1.Repository, issue githubclient.Issue) error {
+	name := fmt.Sprintf("%s-%d", repo.Name, issue.Number)
+	nn := types.NamespacedName{Namespace: repo.Namespace, Name: name}
+
+	desiredSpec := agentswarmv1alpha1.IssueSpec{
+		Number: issue.Number,
+		Title:  issue.Title,
+		Body:   issue.Body,
+		Labels: issue.Labels,
+		State:  toIssueState(issue.State),
+	}
+
+	var existing agentswarmv1alpha1.Issue
+	err := r.Get(ctx, nn, &existing)
+	if apierrors.IsNotFound(err) {
+		issueCR := agentswarmv1alpha1.Issue{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: repo.Namespace,
+			},
+			Spec: desiredSpec,
+		}
+		if err := controllerutil.SetControllerReference(repo, &issueCR, r.Scheme); err != nil {
+			return fmt.Errorf("set owner reference on Issue %q: %w", nn.String(), err)
+		}
+		if err := r.Create(ctx, &issueCR); err != nil {
+			return fmt.Errorf("create Issue %q: %w", nn.String(), err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get Issue %q: %w", nn.String(), err)
+	}
+
+	originalOwnerRefs := append([]metav1.OwnerReference(nil), existing.OwnerReferences...)
+	if err := controllerutil.SetControllerReference(repo, &existing, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on Issue %q: %w", nn.String(), err)
+	}
+
+	ownerRefsChanged := !reflect.DeepEqual(existing.OwnerReferences, originalOwnerRefs)
+	if reflect.DeepEqual(existing.Spec, desiredSpec) && !ownerRefsChanged {
+		return nil
+	}
+
+	existing.Spec = desiredSpec
+	if err := r.Update(ctx, &existing); err != nil {
+		return fmt.Errorf("update Issue %q: %w", nn.String(), err)
+	}
+
+	return nil
+}
+
+// toIssueState normalizes the GitHub client value to the CRD enum type.
+func toIssueState(state string) agentswarmv1alpha1.IssueState {
+	if state == string(agentswarmv1alpha1.IssueStateClosed) {
+		return agentswarmv1alpha1.IssueStateClosed
+	}
+	return agentswarmv1alpha1.IssueStateOpen
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *RepositoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&agentswarmv1alpha1.Repository{}).
+		Owns(&agentswarmv1alpha1.Issue{}).
 		Named("repository").
 		Complete(r)
 }
