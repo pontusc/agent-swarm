@@ -7,6 +7,7 @@ rules:
 - apiGroups:
   - agentswarm.dev
   resources:
+  - issues
   - repositories
   verbs:
   - create
@@ -19,12 +20,14 @@ rules:
 - apiGroups:
   - agentswarm.dev
   resources:
+  - issues/finalizers
   - repositories/finalizers
   verbs:
   - update
 - apiGroups:
   - agentswarm.dev
   resources:
+  - issues/status
   - repositories/status
   verbs:
   - get

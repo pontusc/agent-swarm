@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the agent-swarm itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- issue_admin_role.yaml
+- issue_editor_role.yaml
+- issue_viewer_role.yaml
 - repository_admin_role.yaml
 - repository_editor_role.yaml
 - repository_viewer_role.yaml

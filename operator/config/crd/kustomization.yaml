@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/agentswarm.dev_repositories.yaml
+- bases/agentswarm.dev_issues.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
