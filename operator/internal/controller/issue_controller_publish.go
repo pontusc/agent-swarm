@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -42,13 +43,42 @@ func (r *IssueReconciler) reconcilePublish(
 	})
 
 	if job.Status.Succeeded > 0 {
-		issue.Status.Phase = agentswarmv1alpha1.IssuePhaseDone
+		prURL, err := r.readJobTerminationMessage(ctx, issue.Namespace, jobName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if prURL == "" {
+			message := fmt.Sprintf("publish job %q succeeded but did not report PR URL", jobName)
+			issue.Status.Phase = agentswarmv1alpha1.IssuePhaseFailed
+			issue.Status.LastError = message
+			meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+				Type:               "Published",
+				Status:             metav1.ConditionFalse,
+				Reason:             "PublishFailed",
+				Message:            message,
+				ObservedGeneration: issue.Generation,
+			})
+			if err := r.updateIssueStatus(ctx, issue); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+
+		issue.Status.Phase = agentswarmv1alpha1.IssuePhasePRCreated
+		issue.Status.PRURL = prURL
 		issue.Status.LastError = ""
 		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 			Type:               "Published",
 			Status:             metav1.ConditionTrue,
 			Reason:             "PublishSucceeded",
 			Message:            "Mock agent output pushed to issue branch",
+			ObservedGeneration: issue.Generation,
+		})
+		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+			Type:               "PullRequestCreated",
+			Status:             metav1.ConditionTrue,
+			Reason:             "PullRequestCreated",
+			Message:            fmt.Sprintf("Pull request created: %s", prURL),
 			ObservedGeneration: issue.Generation,
 		})
 		if err := r.updateIssueStatus(ctx, issue); err != nil {
@@ -68,6 +98,13 @@ func (r *IssueReconciler) reconcilePublish(
 			Message:            message,
 			ObservedGeneration: issue.Generation,
 		})
+		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+			Type:               "PullRequestCreated",
+			Status:             metav1.ConditionFalse,
+			Reason:             "PullRequestNotCreated",
+			Message:            message,
+			ObservedGeneration: issue.Generation,
+		})
 		if err := r.updateIssueStatus(ctx, issue); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -75,12 +112,20 @@ func (r *IssueReconciler) reconcilePublish(
 	}
 
 	issue.Status.Phase = agentswarmv1alpha1.IssuePhasePublishPending
+	issue.Status.PRURL = ""
 	issue.Status.LastError = ""
 	meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 		Type:               "Published",
 		Status:             metav1.ConditionFalse,
 		Reason:             "Publishing",
 		Message:            "Publishing mock agent output to GitHub branch",
+		ObservedGeneration: issue.Generation,
+	})
+	meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+		Type:               "PullRequestCreated",
+		Status:             metav1.ConditionFalse,
+		Reason:             "PullRequestPending",
+		Message:            "Waiting for publish job to create pull request",
 		ObservedGeneration: issue.Generation,
 	})
 	if err := r.updateIssueStatus(ctx, issue); err != nil {
@@ -90,8 +135,8 @@ func (r *IssueReconciler) reconcilePublish(
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
-// ensurePublishJob creates (or reuses) the one-shot job that commits and pushes
-// the mock agent output file to the issue branch.
+// ensurePublishJob creates (or reuses) the one-shot job that commits, pushes,
+// and opens or reuses a pull request for the issue branch.
 func (r *IssueReconciler) ensurePublishJob(
 	ctx context.Context,
 	issue *agentswarmv1alpha1.Issue,
@@ -173,7 +218,48 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
 fi
 
 git push "https://x-access-token:${TOKEN}@github.com/${OWNER}/${REPO}.git" "${BRANCH}:${BRANCH}"
-printf '%s\n' "$BRANCH" > /workspace/published-branch.txt`,
+printf '%s\n' "$BRANCH" > /workspace/published-branch.txt
+
+EXISTING=$(curl -sS --get \
+  -H "Authorization: token ${TOKEN}" \
+  -H "Accept: application/vnd.github+json" \
+  --data-urlencode "state=open" \
+  --data-urlencode "head=${OWNER}:${BRANCH}" \
+  "https://api.github.com/repos/${OWNER}/${REPO}/pulls")
+
+PR_URL=$(printf '%s' "$EXISTING" | jq -r 'if type=="array" and length>0 then .[0].html_url else empty end')
+
+if [ -z "$PR_URL" ]; then
+  REPO_RESPONSE=$(curl -sS \
+    -H "Authorization: token ${TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${OWNER}/${REPO}")
+  BASE_BRANCH=$(printf '%s' "$REPO_RESPONSE" | jq -r '.default_branch')
+
+  CREATE_PAYLOAD=$(jq -n \
+    --arg title "agent-swarm: issue #${ISSUE_NUMBER}" \
+    --arg head "$BRANCH" \
+    --arg base "$BASE_BRANCH" \
+    --arg body "Automated mock-agent PR for issue #${ISSUE_NUMBER}" \
+    '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true}')
+
+  CREATED=$(curl -sS -X POST \
+    -H "Authorization: token ${TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/json" \
+    -d "$CREATE_PAYLOAD" \
+    "https://api.github.com/repos/${OWNER}/${REPO}/pulls")
+
+  PR_URL=$(printf '%s' "$CREATED" | jq -r '.html_url // empty')
+fi
+
+if [ -z "$PR_URL" ]; then
+  echo "Failed to determine/create PR URL" >&2
+  exit 1
+fi
+
+printf '%s\n' "$PR_URL" > /workspace/pull-request-url.txt
+printf '%s\n' "$PR_URL" > /dev/termination-log`,
 							},
 							Env: []corev1.EnvVar{
 								{Name: "OWNER", Value: repo.Spec.Owner},
@@ -228,6 +314,37 @@ printf '%s\n' "$BRANCH" > /workspace/published-branch.txt`,
 	}
 
 	return &job, nil
+}
+
+// readJobTerminationMessage returns the terminated container message from the
+// succeeded pod created by the given job.
+func (r *IssueReconciler) readJobTerminationMessage(ctx context.Context, namespace, jobName string) (string, error) {
+	var pods corev1.PodList
+	if err := r.List(
+		ctx,
+		&pods,
+		client.InNamespace(namespace),
+		client.MatchingLabels{"job-name": jobName},
+	); err != nil {
+		return "", fmt.Errorf("list pods for job %q: %w", jobName, err)
+	}
+
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodSucceeded {
+			continue
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.State.Terminated == nil {
+				continue
+			}
+			message := strings.TrimSpace(status.State.Terminated.Message)
+			if message != "" {
+				return message, nil
+			}
+		}
+	}
+
+	return "", nil
 }
 
 // publishJobName keeps publisher Job naming deterministic and role-first.

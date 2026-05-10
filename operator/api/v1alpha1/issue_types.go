@@ -96,11 +96,11 @@ type IssueStatus struct {
 // IssuePhase is the high-level stage of issue handling.
 //
 // Current state machine:
-// Pending -> PreparingWorkspace -> WorkspaceReady -> AgentRunning -> PublishPending -> Done
+// Pending -> PreparingWorkspace -> WorkspaceReady -> AgentRunning -> PublishPending -> PRCreated
 // Any stage can transition to Failed.
 //
 // Planned later phases:
-// PublishPending -> PRCreated -> Done
+// PRCreated -> Done (on merge/close policy)
 type IssuePhase string
 
 const (
