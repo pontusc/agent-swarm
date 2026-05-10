@@ -77,6 +77,7 @@ cd operator/ && make install deploy            # install CRDs + deploy operator 
 - Issue phase state machine (current + near-term):
   - `Pending` -> `PreparingWorkspace` -> `WorkspaceReady` -> `AgentRunning` -> `PublishPending`
   - `PublishPending` -> `PRCreated` -> `Done` (when PR merge is detected)
+  - `Done` triggers automatic `Issue` CR deletion; owner refs then garbage-collect workspace PVC/job/pod resources
   - any stage can transition to `Failed`
 
 ## More

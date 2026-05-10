@@ -48,6 +48,9 @@ func (r *IssueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	if issue.Status.Phase == agentswarmv1alpha1.IssuePhaseDone {
+		if err := r.Delete(ctx, &issue); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete completed Issue %q: %w", req.NamespacedName.String(), err)
+		}
 		return ctrl.Result{}, nil
 	}
 
