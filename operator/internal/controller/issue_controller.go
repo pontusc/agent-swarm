@@ -82,10 +82,10 @@ func (r *IssueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	issue.Status.PrepJobName = prepJobName
 
 	if prepJob.Status.Succeeded > 0 {
-		return r.reconcileMockAgent(ctx, &issue, workspacePVC)
+		return r.reconcileMockAgent(ctx, &issue, repo, workspacePVC)
 	}
 
-	if prepJob.Status.Failed > 0 && prepJobReachedBackoffLimit(prepJob) {
+	if prepJob.Status.Failed > 0 && jobReachedBackoffLimit(prepJob) {
 		if prepJob.DeletionTimestamp != nil {
 			issue.Status.Phase = agentswarmv1alpha1.IssuePhasePreparingWorkspace
 			issue.Status.LastError = fmt.Sprintf("workspace prep failed, recreating job (%d/%d)", issue.Status.PrepRetries, maxPrepRetries)

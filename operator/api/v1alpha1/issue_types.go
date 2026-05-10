@@ -65,6 +65,10 @@ type IssueStatus struct {
 	// +optional
 	PrepJobName string `json:"prepJobName,omitempty"`
 
+	// PublishJobName is the Job that publishes mock agent output to GitHub.
+	// +optional
+	PublishJobName string `json:"publishJobName,omitempty"`
+
 	// PrepRetries is how many times workspace preparation has been retried.
 	// Max retries are controller-defined.
 	// +optional
@@ -92,7 +96,7 @@ type IssueStatus struct {
 // IssuePhase is the high-level stage of issue handling.
 //
 // Current state machine:
-// Pending -> PreparingWorkspace -> WorkspaceReady -> AgentRunning -> PublishPending
+// Pending -> PreparingWorkspace -> WorkspaceReady -> AgentRunning -> PublishPending -> Done
 // Any stage can transition to Failed.
 //
 // Planned later phases:

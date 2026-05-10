@@ -179,6 +179,10 @@ spec:
                   Max retries are controller-defined.
                 format: int32
                 type: integer
+              publishJobName:
+                description: PublishJobName is the Job that publishes mock agent output
+                  to GitHub.
+                type: string
               workspacePVC:
                 description: WorkspacePVC is the name of the PVC holding the per-issue
                   workspace.

@@ -18,7 +18,12 @@ import (
 
 // reconcileMockAgent assigns a mock agent pod once workspace prep is complete.
 // It tracks pod lifecycle and advances issue phase toward publish handoff.
-func (r *IssueReconciler) reconcileMockAgent(ctx context.Context, issue *agentswarmv1alpha1.Issue, workspacePVC string) (ctrl.Result, error) {
+func (r *IssueReconciler) reconcileMockAgent(
+	ctx context.Context,
+	issue *agentswarmv1alpha1.Issue,
+	repo *agentswarmv1alpha1.Repository,
+	workspacePVC string,
+) (ctrl.Result, error) {
 	pod, err := r.ensureMockAgentPod(ctx, issue, workspacePVC)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -31,6 +36,7 @@ func (r *IssueReconciler) reconcileMockAgent(ctx context.Context, issue *agentsw
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
 		issue.Status.Phase = agentswarmv1alpha1.IssuePhasePublishPending
+		issue.Status.PublishJobName = publishJobName(issue)
 		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 			Type:               "WorkspacePrepared",
 			Status:             metav1.ConditionTrue,
@@ -45,10 +51,7 @@ func (r *IssueReconciler) reconcileMockAgent(ctx context.Context, issue *agentsw
 			Message:            "Mock agent pod completed successfully",
 			ObservedGeneration: issue.Generation,
 		})
-		if err := r.updateIssueStatus(ctx, issue); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return r.reconcilePublish(ctx, issue, repo, workspacePVC)
 	case corev1.PodFailed:
 		message := fmt.Sprintf("mock agent pod %q failed", pod.Name)
 		issue.Status.Phase = agentswarmv1alpha1.IssuePhaseFailed

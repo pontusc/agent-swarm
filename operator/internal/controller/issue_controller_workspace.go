@@ -143,8 +143,8 @@ git symbolic-ref --short HEAD > /workspace/current-branch.txt`,
 	return &job, nil
 }
 
-// prepJobReachedBackoffLimit reports whether Kubernetes has exhausted retries.
-func prepJobReachedBackoffLimit(job *batchv1.Job) bool {
+// jobReachedBackoffLimit reports whether Kubernetes has exhausted retries.
+func jobReachedBackoffLimit(job *batchv1.Job) bool {
 	if job.Spec.BackoffLimit == nil {
 		return false
 	}
