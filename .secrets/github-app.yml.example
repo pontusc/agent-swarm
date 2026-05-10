@@ -1,0 +1,17 @@
+# Copy this file to .secrets/github-app.yml and fill in real values.
+# Apply with: kubectl apply -f .secrets/github-app.yml
+#
+# stringData accepts raw values; Kubernetes base64-encodes them on apply.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-app-creds
+  namespace: default
+type: Opaque
+stringData:
+  appId: "REPLACE_WITH_APP_ID"
+  installationId: "REPLACE_WITH_INSTALLATION_ID"
+  privateKey: |
+    -----BEGIN RSA PRIVATE KEY-----
+    REPLACE_WITH_PRIVATE_KEY_CONTENT
+    -----END RSA PRIVATE KEY-----
