@@ -180,7 +180,7 @@ spec:
                 format: int32
                 type: integer
               publishJobName:
-                description: PublishJobName is the Job that publishes mock agent output
+                description: PublishJobName is the Job that publishes agent output
                   to GitHub.
                 type: string
               workspacePVC:

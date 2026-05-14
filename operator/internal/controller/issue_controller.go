@@ -104,7 +104,7 @@ func (r *IssueReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	issue.Status.PrepJobName = prepJobName
 
 	if prepJob.Status.Succeeded > 0 {
-		return r.reconcileMockAgent(ctx, &issue, repo, workspacePVC)
+		return r.reconcileAgent(ctx, &issue, repo, workspacePVC)
 	}
 
 	if prepJob.Status.Failed > 0 && jobReachedBackoffLimit(prepJob) {

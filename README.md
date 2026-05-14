@@ -63,16 +63,18 @@ For multi-version conversion add `--conversion --spoke v2`.
 ```bash
 make start-minikube                            # local cluster
 kubectl apply -f .secrets/github-app.yml       # GitHub App credentials Secret
+kubectl apply -f .secrets/opencode-credentials.yml  # OpenCode Zen API key Secret
 cd operator/ && make install deploy            # install CRDs + deploy operator (when ready)
 ```
 
 ## Pending behavior notes
 
-- Issue lifecycle policy (planned): do not auto-close/remove `Issue` CRs on GitHub close; only transition/close when the matching PR is merged.
+- Issue lifecycle policy: do not auto-close/remove `Issue` CRs on GitHub close alone; only transition/cleanup when the matching PR is merged.
 - Phase 2 agent flow (draft):
   - `IssueController` detects unassigned `Issue` and allocates work.
   - Operator prepares a per-issue workspace in a PVC by cloning repo + creating branch using GitHub App credentials.
-  - Agent pod mounts only the prepared workspace PVC (no GitHub credentials in the pod), performs edits, and exits with artifacts/status.
+  - Agent pod mounts only the prepared workspace PVC, receives an OpenCode API key from `Secret/opencode-credentials`, runs `opencode run`, and exits with artifacts/status.
+  - Current PoC prompt asks OpenCode to append a hello line to `/workspace/repo/.agent-output`.
   - Operator reads results, pushes branch, opens PR, and updates `Issue.status`.
 - Issue phase state machine (current + near-term):
   - `Pending` -> `PreparingWorkspace` -> `WorkspaceReady` -> `AgentRunning` -> `PublishPending`

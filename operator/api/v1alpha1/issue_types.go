@@ -65,7 +65,7 @@ type IssueStatus struct {
 	// +optional
 	PrepJobName string `json:"prepJobName,omitempty"`
 
-	// PublishJobName is the Job that publishes mock agent output to GitHub.
+	// PublishJobName is the Job that publishes agent output to GitHub.
 	// +optional
 	PublishJobName string `json:"publishJobName,omitempty"`
 

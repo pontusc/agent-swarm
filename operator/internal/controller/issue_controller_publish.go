@@ -18,7 +18,7 @@ import (
 	agentswarmv1alpha1 "github.com/pontuscurtsson/agent-swarm/operator/api/v1alpha1"
 )
 
-// reconcilePublish runs after mock agent completion and pushes mock output to
+// reconcilePublish runs after agent completion and pushes agent output to
 // the issue branch using a short-lived publisher job with GitHub App creds.
 func (r *IssueReconciler) reconcilePublish(
 	ctx context.Context,
@@ -38,7 +38,7 @@ func (r *IssueReconciler) reconcilePublish(
 		Type:               "AgentCompleted",
 		Status:             metav1.ConditionTrue,
 		Reason:             "AgentRunSucceeded",
-		Message:            "Mock agent pod completed successfully",
+		Message:            "Agent pod completed successfully",
 		ObservedGeneration: issue.Generation,
 	})
 
@@ -71,7 +71,7 @@ func (r *IssueReconciler) reconcilePublish(
 			Type:               "Published",
 			Status:             metav1.ConditionTrue,
 			Reason:             "PublishSucceeded",
-			Message:            "Mock agent output pushed to issue branch",
+			Message:            "Agent output pushed to issue branch",
 			ObservedGeneration: issue.Generation,
 		})
 		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
@@ -118,7 +118,7 @@ func (r *IssueReconciler) reconcilePublish(
 		Type:               "Published",
 		Status:             metav1.ConditionFalse,
 		Reason:             "Publishing",
-		Message:            "Publishing mock agent output to GitHub branch",
+		Message:            "Publishing agent output to GitHub branch",
 		ObservedGeneration: issue.Generation,
 	})
 	meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
@@ -175,16 +175,16 @@ func (r *IssueReconciler) ensurePublishJob(
 apk add --no-cache git curl jq openssl
 
 cd /workspace/repo
-test -f .agent-mock-output
+test -f .agent-output
 
 git config user.name "agent-swarm-bot"
 git config user.email "agent-swarm@local"
-git add .agent-mock-output
+git add .agent-output
 
 if git diff --cached --quiet; then
   echo "No changes to publish"
 else
-  git commit -m "mock agent output for issue ${ISSUE_NUMBER}"
+  git commit -m "agent output for issue ${ISSUE_NUMBER}"
 fi
 
 KEY_FILE=/tmp/github-app.pem
@@ -240,7 +240,7 @@ if [ -z "$PR_URL" ]; then
     --arg title "agent-swarm: issue #${ISSUE_NUMBER}" \
     --arg head "$BRANCH" \
     --arg base "$BASE_BRANCH" \
-    --arg body "Automated mock-agent PR for issue #${ISSUE_NUMBER}
+    --arg body "Automated agent PR for issue #${ISSUE_NUMBER}
 
 Closes #${ISSUE_NUMBER}" \
     '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true}')

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -16,15 +17,22 @@ import (
 	agentswarmv1alpha1 "github.com/pontuscurtsson/agent-swarm/operator/api/v1alpha1"
 )
 
-// reconcileMockAgent assigns a mock agent pod once workspace prep is complete.
+const (
+	opencodeAgentImage            = "localhost:5000/agent-swarm/agent:latest"
+	opencodeCredentialsSecretName = "opencode-credentials"
+	opencodeCredentialsSecretKey  = "apiKey"
+	defaultOpenCodeModel          = "opencode/gpt-5.4-mini"
+)
+
+// reconcileAgent assigns an agent pod once workspace prep is complete.
 // It tracks pod lifecycle and advances issue phase toward publish handoff.
-func (r *IssueReconciler) reconcileMockAgent(
+func (r *IssueReconciler) reconcileAgent(
 	ctx context.Context,
 	issue *agentswarmv1alpha1.Issue,
 	repo *agentswarmv1alpha1.Repository,
 	workspacePVC string,
 ) (ctrl.Result, error) {
-	pod, err := r.ensureMockAgentPod(ctx, issue, workspacePVC)
+	pod, err := r.ensureAgentPod(ctx, issue, workspacePVC)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -48,12 +56,12 @@ func (r *IssueReconciler) reconcileMockAgent(
 			Type:               "AgentCompleted",
 			Status:             metav1.ConditionTrue,
 			Reason:             "AgentRunSucceeded",
-			Message:            "Mock agent pod completed successfully",
+			Message:            "Agent pod completed successfully",
 			ObservedGeneration: issue.Generation,
 		})
 		return r.reconcilePublish(ctx, issue, repo, workspacePVC)
 	case corev1.PodFailed:
-		message := fmt.Sprintf("mock agent pod %q failed", pod.Name)
+		message := fmt.Sprintf("agent pod %q failed", pod.Name)
 		issue.Status.Phase = agentswarmv1alpha1.IssuePhaseFailed
 		issue.Status.LastError = message
 		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
@@ -80,7 +88,7 @@ func (r *IssueReconciler) reconcileMockAgent(
 			Type:               "AgentCompleted",
 			Status:             metav1.ConditionFalse,
 			Reason:             "AgentRunning",
-			Message:            "Mock agent pod is running",
+			Message:            "Agent pod is running",
 			ObservedGeneration: issue.Generation,
 		})
 		if err := r.updateIssueStatus(ctx, issue); err != nil {
@@ -90,18 +98,20 @@ func (r *IssueReconciler) reconcileMockAgent(
 	}
 }
 
-// ensureMockAgentPod creates (or reuses) the mock agent pod that mounts
-// the prepared workspace PVC and writes execution artifacts.
-func (r *IssueReconciler) ensureMockAgentPod(ctx context.Context, issue *agentswarmv1alpha1.Issue, workspacePVC string) (*corev1.Pod, error) {
-	name := mockAgentPodName(issue)
+// ensureAgentPod creates (or reuses) the agent pod that mounts the prepared
+// workspace PVC and runs OpenCode against the checked out repository.
+func (r *IssueReconciler) ensureAgentPod(ctx context.Context, issue *agentswarmv1alpha1.Issue, workspacePVC string) (*corev1.Pod, error) {
+	name := agentPodName(issue)
 	key := client.ObjectKey{Namespace: issue.Namespace, Name: name}
 
 	var existing corev1.Pod
 	if err := r.Get(ctx, key, &existing); err == nil {
 		return &existing, nil
 	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("get mock agent pod %q: %w", key.String(), err)
+		return nil, fmt.Errorf("get agent pod %q: %w", key.String(), err)
 	}
+
+	labelsValue := strings.Join(issue.Spec.Labels, ",")
 
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -112,16 +122,23 @@ func (r *IssueReconciler) ensureMockAgentPod(ctx context.Context, issue *agentsw
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
 				{
-					Name:            "agent-mock",
-					Image:           "alpine/git:2.47.2",
-					ImagePullPolicy: corev1.PullIfNotPresent,
-					Command:         []string{"/bin/sh", "-c"},
-					Args: []string{
-						`set -eu
-cd /workspace/repo
-git symbolic-ref --short HEAD > /workspace/agent-observed-branch.txt
-printf 'mock-agent-ran\n' > /workspace/agent-result.txt
-printf 'mock agent touched workspace\n' >> /workspace/repo/.agent-mock-output`,
+					Name:            "agent",
+					Image:           opencodeAgentImage,
+					ImagePullPolicy: corev1.PullAlways,
+					Env: []corev1.EnvVar{
+						{Name: "AGENT_WORKSPACE", Value: "/workspace/repo"},
+						{Name: "ISSUE_NUMBER", Value: fmt.Sprintf("%d", issue.Spec.Number)},
+						{Name: "ISSUE_TITLE", Value: issue.Spec.Title},
+						{Name: "ISSUE_BODY", Value: issue.Spec.Body},
+						{Name: "ISSUE_LABELS", Value: labelsValue},
+						{Name: "OPENCODE_MODEL", Value: defaultOpenCodeModel},
+						{
+							Name: "OPENCODE_API_KEY",
+							ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: opencodeCredentialsSecretName},
+								Key:                  opencodeCredentialsSecretKey,
+							}},
+						},
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "workspace", MountPath: "/workspace"},
@@ -140,16 +157,16 @@ printf 'mock agent touched workspace\n' >> /workspace/repo/.agent-mock-output`,
 	}
 
 	if err := controllerutil.SetControllerReference(issue, &pod, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set owner reference on mock agent pod %q: %w", key.String(), err)
+		return nil, fmt.Errorf("set owner reference on agent pod %q: %w", key.String(), err)
 	}
 	if err := r.Create(ctx, &pod); err != nil {
-		return nil, fmt.Errorf("create mock agent pod %q: %w", key.String(), err)
+		return nil, fmt.Errorf("create agent pod %q: %w", key.String(), err)
 	}
 
 	return &pod, nil
 }
 
-// mockAgentPodName keeps mock agent pod naming deterministic per issue.
-func mockAgentPodName(issue *agentswarmv1alpha1.Issue) string {
-	return fmt.Sprintf("agent-mock-%s", issue.Name)
+// agentPodName keeps agent pod naming deterministic per issue.
+func agentPodName(issue *agentswarmv1alpha1.Issue) string {
+	return fmt.Sprintf("agent-%s", issue.Name)
 }
