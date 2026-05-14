@@ -179,12 +179,12 @@ test -f .agent-output
 
 git config user.name "agent-swarm-bot"
 git config user.email "agent-swarm@local"
-git add .agent-output
+git add -A
 
 if git diff --cached --quiet; then
   echo "No changes to publish"
 else
-  git commit -m "agent output for issue ${ISSUE_NUMBER}"
+  git commit -m "agent changes for issue ${ISSUE_NUMBER}"
 fi
 
 KEY_FILE=/tmp/github-app.pem

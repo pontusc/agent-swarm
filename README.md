@@ -74,7 +74,7 @@ cd operator/ && make install deploy            # install CRDs + deploy operator 
   - `IssueController` detects unassigned `Issue` and allocates work.
   - Operator prepares a per-issue workspace in a PVC by cloning repo + creating branch using GitHub App credentials.
   - Agent pod mounts only the prepared workspace PVC, receives an OpenCode API key from `Secret/opencode-credentials`, runs `opencode run`, and exits with artifacts/status.
-  - Current PoC prompt asks OpenCode to append a hello line to `/workspace/repo/.agent-output`.
+  - Current PoC prompt gives OpenCode the issue title/body and asks it to implement the requested fix with minimal focused changes.
   - Operator reads results, pushes branch, opens PR, and updates `Issue.status`.
 - Issue phase state machine (current + near-term):
   - `Pending` -> `PreparingWorkspace` -> `WorkspaceReady` -> `AgentRunning` -> `PublishPending`
