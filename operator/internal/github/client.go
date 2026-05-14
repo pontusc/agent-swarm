@@ -1,6 +1,13 @@
 // Package github wraps the GitHub REST API behind a narrow interface used by
 // the operator's reconcilers. The real implementation uses go-github with a
 // GitHub App installation transport.
+//
+// Note on go-github versions: this package imports v86. go.mod also lists
+// v84 as an indirect dependency because ghinstallation/v2 (latest v2.18.0)
+// pins v84 internally for its own API types. The duplicate is harmless —
+// neither version's types leak through the Client interface — and cannot
+// be removed without forking ghinstallation. `go mod why github.com/google/go-github/v84`
+// reports it as not needed by main module code, which is correct.
 package github
 
 import (

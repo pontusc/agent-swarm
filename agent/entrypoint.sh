@@ -25,9 +25,14 @@ fi
 
 export OPENCODE_DISABLE_AUTOUPDATE=true
 export OPENCODE_DISABLE_DEFAULT_PLUGINS=true
+# shellcheck disable=SC2016
+# {env:VAR} is opencode's own template syntax — resolved by opencode at
+# runtime, not bash. Single quotes are intentional: we want the literal
+# {env:OPENCODE_MODEL} / {env:OPENCODE_API_KEY} strings in the JSON.
 export OPENCODE_CONFIG_CONTENT='{"$schema":"https://opencode.ai/config.json","model":"{env:OPENCODE_MODEL}","provider":{"opencode":{"options":{"apiKey":"{env:OPENCODE_API_KEY}"}}},"share":"disabled"}'
 
-prompt=$(cat <<EOF
+prompt=$(
+  cat << EOF
 You are working in a checked-out git repository for GitHub issue #${issue_number}.
 
 Issue title:
@@ -50,6 +55,13 @@ EOF
 
 opencode run --dir "${workspace_dir}" --model "${opencode_model}" "${prompt}"
 
+# No-op exit policy: if opencode produced zero file changes, fail.
+# An Issue CR represents work to be done for a GitHub issue; "agent decided
+# nothing was needed" is treated as a failure rather than a silent success,
+# so the Issue lands in Failed with status.lastError pointing here instead of
+# producing an empty PR or vanishing into Done with no audit trail. The
+# publisher Job has its own defensive "nothing staged" branch for the edge
+# case where opencode only touched .gitignored files.
 if [[ -z "$(git -C "${workspace_dir}" status --porcelain)" ]]; then
   printf 'opencode completed without producing any repository changes\n' >&2
   exit 1
