@@ -2,7 +2,7 @@
 
 Kubernetes operator that turns GitHub issues into agent-attempted pull requests.
 
-This README is for someone reading the operator code. For project-wide context (phase tracker, collaboration mode, what _not_ to build yet) see [`../CLAUDE.md`](../CLAUDE.md). For kubebuilder mechanics (scaffolding markers, codegen rules) see [`AGENTS.md`](AGENTS.md).
+This README is for someone reading the operator code. For project-wide context (collaboration mode, scope, conventions) see [`../CLAUDE.md`](../CLAUDE.md). For kubebuilder mechanics (scaffolding markers, codegen rules) see [`AGENTS.md`](AGENTS.md).
 
 ## What it does
 
@@ -11,7 +11,7 @@ Two custom resources, two controllers, one binary:
 - **`Repository`** declares a GitHub repo to watch. `RepositoryController` polls it every `spec.syncIntervalSeconds` and reflects the open issues as child `Issue` CRs in the cluster.
 - **`Issue`** is a read-only mirror of one GitHub issue. `IssueController` drives each one through a phase machine that materializes a workspace, runs an agent against it, opens a pull request, and waits for the PR to merge before cleaning up.
 
-Single operator binary in `cmd/main.go` hosts both controllers. Single Deployment. No webhooks yet — polling is the only trigger from GitHub (Phase 3+).
+Single operator binary in `cmd/main.go` hosts both controllers. Single Deployment. Polling is the only trigger from GitHub; webhook support is intentionally out of scope (see [`../CLAUDE.md`](../CLAUDE.md) → Scope).
 
 ## Architecture
 
@@ -63,7 +63,7 @@ See the file header of [`internal/controller/issue_controller_publish.go`](inter
 
 Two things wake the controllers:
 
-1. **Polling.** `RepositoryController` requeues itself every `Repository.spec.syncIntervalSeconds` to hit the GitHub Issues API. This is the only path from "an upstream change happened on GitHub" to "the cluster reflects it." Webhooks would shorten this loop and are Phase 3+.
+1. **Polling.** `RepositoryController` requeues itself every `Repository.spec.syncIntervalSeconds` to hit the GitHub Issues API. This is the only path from "an upstream change happened on GitHub" to "the cluster reflects it." Webhooks would shorten this loop but are intentionally out of scope.
 2. **Watches.** `IssueController.SetupWithManager` calls `Owns(Job, Pod)`. Status changes on owned Jobs/Pods produce events that wake the reconciler — so when the prep Job finishes, the controller is poked immediately rather than discovering it on the next poll.
 
 ### End-to-end sequence

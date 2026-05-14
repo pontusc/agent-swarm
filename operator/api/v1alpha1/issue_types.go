@@ -74,11 +74,11 @@ type IssueStatus struct {
 	// +optional
 	PrepRetries int32 `json:"prepRetries,omitempty"`
 
-	// AgentPodName will point to the assigned agent pod (Phase 2).
+	// AgentPodName is the name of the agent pod assigned to this issue.
 	// +optional
 	AgentPodName string `json:"agentPodName,omitempty"`
 
-	// PRURL will point to the pull request opened for this issue (Phase 2).
+	// PRURL is the URL of the pull request opened for this issue.
 	// +optional
 	PRURL string `json:"prUrl,omitempty"`
 

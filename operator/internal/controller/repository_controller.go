@@ -44,7 +44,7 @@ type RepositoryReconciler struct {
 //  4. Writes status (LastSyncTime, ObservedIssueCount, Synced condition).
 //
 // Requeues every Repository.spec.syncIntervalSeconds. Polling is the only
-// trigger today; webhook support is Phase 3+ (see CLAUDE.md).
+// trigger; webhooks are intentionally out of scope (see CLAUDE.md → Scope).
 func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 

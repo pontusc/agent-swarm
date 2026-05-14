@@ -85,8 +85,8 @@ spec:
             description: status defines the observed state of Issue
             properties:
               agentPodName:
-                description: AgentPodName will point to the assigned agent pod (Phase
-                  2).
+                description: AgentPodName is the name of the agent pod assigned to
+                  this issue.
                 type: string
               branch:
                 description: Branch is the branch prepared for this issue's agent
@@ -166,8 +166,8 @@ spec:
                   pipeline.
                 type: string
               prUrl:
-                description: PRURL will point to the pull request opened for this
-                  issue (Phase 2).
+                description: PRURL is the URL of the pull request opened for this
+                  issue.
                 type: string
               prepJobName:
                 description: PrepJobName is the Job that clones the repository and

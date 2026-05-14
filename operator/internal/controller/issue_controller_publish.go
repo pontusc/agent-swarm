@@ -21,13 +21,12 @@
 // require a credentialed actor that the agent cannot influence beyond
 // shaping commit content, and humans review the PR before merge.
 //
-// Why bash and not a Go binary: the inline script is a documented
-// Phase 2 PoC choice. Rewriting it as a small Go binary that reuses
-// internal/github would shrink the credentialed Pod's attack surface
-// (no shell, no /tmp PEM, no apk-add at runtime) but the shape of the
-// boundary stays the same in either implementation. Tracked as deferred
-// item #4 in the code-review pass; revisit when the bash becomes a
-// maintenance pain.
+// Why bash and not a Go binary: the inline script is the minimal
+// implementation that establishes the credential boundary. Rewriting it
+// as a small Go binary that reuses internal/github would shrink the
+// credentialed Pod's attack surface (no shell, no /tmp PEM, no apk-add
+// at runtime), but the shape of the boundary stays the same in either
+// implementation. The current shape is the documented design choice.
 package controller
 
 import (
