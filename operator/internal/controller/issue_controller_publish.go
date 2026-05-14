@@ -175,7 +175,6 @@ func (r *IssueReconciler) ensurePublishJob(
 apk add --no-cache git curl jq openssl
 
 cd /workspace/repo
-test -f .agent-output
 
 git config user.name "agent-swarm-bot"
 git config user.email "agent-swarm@local"

@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -23,6 +24,7 @@ import (
 type IssueReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
+	KubeClient      kubernetes.Interface
 	newGitHubClient func(creds githubclient.AppCreds) (githubclient.Client, error)
 }
 
@@ -31,8 +33,10 @@ type IssueReconciler struct {
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=issues/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
 
 const maxPrepRetries int32 = 3

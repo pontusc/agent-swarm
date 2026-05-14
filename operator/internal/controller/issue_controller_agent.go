@@ -2,7 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,7 +26,10 @@ const (
 	opencodeCredentialsSecretName = "opencode-credentials"
 	opencodeCredentialsSecretKey  = "apiKey"
 	defaultOpenCodeModel          = "opencode/gpt-5.4-mini"
+	agentLogChunkBytes            = 768 * 1024
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // reconcileAgent assigns an agent pod once workspace prep is complete.
 // It tracks pod lifecycle and advances issue phase toward publish handoff.
@@ -43,6 +50,10 @@ func (r *IssueReconciler) reconcileAgent(
 
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
+		if err := r.persistAgentLogConfigMaps(ctx, issue, pod.Name); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		issue.Status.Phase = agentswarmv1alpha1.IssuePhasePublishPending
 		issue.Status.PublishJobName = publishJobName(issue)
 		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
@@ -61,6 +72,10 @@ func (r *IssueReconciler) reconcileAgent(
 		})
 		return r.reconcilePublish(ctx, issue, repo, workspacePVC)
 	case corev1.PodFailed:
+		if err := r.persistAgentLogConfigMaps(ctx, issue, pod.Name); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		message := fmt.Sprintf("agent pod %q failed", pod.Name)
 		issue.Status.Phase = agentswarmv1alpha1.IssuePhaseFailed
 		issue.Status.LastError = message
@@ -169,4 +184,149 @@ func (r *IssueReconciler) ensureAgentPod(ctx context.Context, issue *agentswarmv
 // agentPodName keeps agent pod naming deterministic per issue.
 func agentPodName(issue *agentswarmv1alpha1.Issue) string {
 	return fmt.Sprintf("agent-%s", issue.Name)
+}
+
+// persistAgentLogConfigMaps stores full agent pod logs in one or more
+// deterministic ConfigMaps so logs remain available after Issue cleanup.
+func (r *IssueReconciler) persistAgentLogConfigMaps(ctx context.Context, issue *agentswarmv1alpha1.Issue, podName string) error {
+	if r.KubeClient == nil {
+		return fmt.Errorf("kubernetes client is not configured")
+	}
+
+	logOutput, err := r.readPodLogs(ctx, issue.Namespace, podName)
+	if err != nil {
+		return err
+	}
+	logOutput = sanitizeAgentLog(logOutput)
+	if logOutput == "" {
+		logOutput = "<empty agent log output>\n"
+	}
+
+	parts := splitLogOutput(logOutput, agentLogChunkBytes)
+	baseName := agentLogConfigMapBaseName(issue)
+
+	for idx, part := range parts {
+		name := fmt.Sprintf("%s-%03d", baseName, idx)
+		if err := r.upsertAgentLogConfigMap(ctx, issue, name, podName, idx, len(parts), part); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *IssueReconciler) readPodLogs(ctx context.Context, namespace string, podName string) (string, error) {
+	stream, err := r.KubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{}).Stream(ctx)
+	if err != nil {
+		return "", fmt.Errorf("stream logs for pod %q/%q: %w", namespace, podName, err)
+	}
+	defer stream.Close()
+
+	logBytes, err := io.ReadAll(stream)
+	if err != nil {
+		return "", fmt.Errorf("read logs for pod %q/%q: %w", namespace, podName, err)
+	}
+
+	return string(logBytes), nil
+}
+
+func (r *IssueReconciler) upsertAgentLogConfigMap(
+	ctx context.Context,
+	issue *agentswarmv1alpha1.Issue,
+	name string,
+	podName string,
+	partNumber int,
+	totalParts int,
+	logChunk string,
+) error {
+	key := client.ObjectKey{Namespace: issue.Namespace, Name: name}
+
+	labels := map[string]string{
+		"agentswarm.dev/agent-log":  "true",
+		"agentswarm.dev/issue-name": issue.Name,
+	}
+	annotations := map[string]string{
+		"agentswarm.dev/issue-number": fmt.Sprintf("%d", issue.Spec.Number),
+		"agentswarm.dev/log-part":     fmt.Sprintf("%d", partNumber),
+		"agentswarm.dev/log-parts":    fmt.Sprintf("%d", totalParts),
+		"agentswarm.dev/pod-name":     podName,
+	}
+
+	var existing corev1.ConfigMap
+	if err := r.Get(ctx, key, &existing); err == nil {
+		existing.Labels = labels
+		existing.Annotations = annotations
+		existing.Data = map[string]string{"log.txt": logChunk}
+		if err := r.Update(ctx, &existing); err != nil {
+			return fmt.Errorf("update agent log ConfigMap %q: %w", key.String(), err)
+		}
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get agent log ConfigMap %q: %w", key.String(), err)
+	}
+
+	configMap := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   issue.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Data: map[string]string{"log.txt": logChunk},
+	}
+
+	if err := r.Create(ctx, &configMap); err != nil {
+		return fmt.Errorf("create agent log ConfigMap %q: %w", key.String(), err)
+	}
+
+	return nil
+}
+
+func splitLogOutput(output string, chunkSize int) []string {
+	if chunkSize <= 0 {
+		return []string{output}
+	}
+
+	if len(output) <= chunkSize {
+		return []string{output}
+	}
+
+	parts := make([]string, 0, (len(output)/chunkSize)+1)
+	for start := 0; start < len(output); start += chunkSize {
+		end := start + chunkSize
+		if end > len(output) {
+			end = len(output)
+		}
+		parts = append(parts, output[start:end])
+	}
+
+	return parts
+}
+
+func agentLogConfigMapBaseName(issue *agentswarmv1alpha1.Issue) string {
+	base := fmt.Sprintf("agent-log-%s", issue.Name)
+	maxLength := 59
+	if len(base) <= maxLength {
+		return base
+	}
+
+	hash := sha1.Sum([]byte(base))
+	suffix := hex.EncodeToString(hash[:4])
+	prefixLength := maxLength - len(suffix) - 1
+	if prefixLength < 1 {
+		prefixLength = 1
+	}
+
+	return fmt.Sprintf("%s-%s", base[:prefixLength], suffix)
+}
+
+func sanitizeAgentLog(logOutput string) string {
+	if logOutput == "" {
+		return ""
+	}
+
+	sanitized := ansiEscapePattern.ReplaceAllString(logOutput, "")
+	sanitized = strings.ReplaceAll(sanitized, "\r", "")
+
+	return sanitized
 }
