@@ -1,3 +1,33 @@
+// Publisher phase: the only Pod in this operator that holds GitHub App
+// credentials and the only one that can push to a remote. Runs strictly
+// after the agent Pod has exited successfully — reconcileAgent's
+// PodSucceeded branch dispatches into reconcilePublish.
+//
+// Credential boundary (intentional, do not collapse into one Pod):
+//
+//   - The agent Pod (see issue_controller_agent.go) gets no GitHub token.
+//     Its env is the OpenCode API key plus issue metadata; its only volume
+//     is the workspace PVC. If the LLM goes off-script and writes garbage
+//     files, the workspace is dirty but nothing leaves the cluster.
+//   - This publisher Pod gets the GitHub App's appId, installationId, and
+//     PEM-encoded private key from the Secret named by
+//     Repository.spec.secretRef. It runs a fixed bash script: stage,
+//     commit, sign a JWT, exchange for an installation token, push the
+//     branch, and create or reuse a pull request. There is no agent
+//     intelligence in this Pod — its only input from the agent is
+//     "whatever files were left in /workspace/repo."
+//
+// So the agent can only produce a *proposed* diff. Pushing and PR creation
+// require a credentialed actor that the agent cannot influence beyond
+// shaping commit content, and humans review the PR before merge.
+//
+// Why bash and not a Go binary: the inline script is a documented
+// Phase 2 PoC choice. Rewriting it as a small Go binary that reuses
+// internal/github would shrink the credentialed Pod's attack surface
+// (no shell, no /tmp PEM, no apk-add at runtime) but the shape of the
+// boundary stays the same in either implementation. Tracked as deferred
+// item #4 in the code-review pass; revisit when the bash becomes a
+// maintenance pain.
 package controller
 
 import (

@@ -69,7 +69,7 @@ cd operator/ && make install deploy            # install CRDs + deploy operator 
 
 ## Pending behavior notes
 
-- Issue lifecycle policy: do not auto-close/remove `Issue` CRs on GitHub close alone; only transition/cleanup when the matching PR is merged.
+- Issue lifecycle policy: an `Issue` CR exists only as long as its upstream GitHub issue is open. Closed-on-GitHub issues fall out of the open-only sync snapshot and are pruned by `RepositoryController`; merge-driven completion runs the full `Done` transition (cascade-delete via ownerRefs). Either path produces the same cleanup; the merge path additionally retains the agent log ConfigMap because it isn't owned by the `Issue` CR.
 - Phase 2 agent flow (draft):
   - `IssueController` detects unassigned `Issue` and allocates work.
   - Operator prepares a per-issue workspace in a PVC by cloning repo + creating branch using GitHub App credentials.
@@ -85,6 +85,7 @@ cd operator/ && make install deploy            # install CRDs + deploy operator 
 
 ## More
 
+- [`operator/README.md`](operator/README.md) — operator architecture, trigger flow, phase machine, file layout
 - `CLAUDE.md` — project-specific working notes (phases, conventions, scope)
 - `operator/AGENTS.md` — kubebuilder operational reference (codegen, markers, distribution)
 - [Kubebuilder Book](https://book.kubebuilder.io/) — full upstream docs
