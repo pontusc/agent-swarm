@@ -16,35 +16,51 @@ Single operator binary in `cmd/main.go` hosts both controllers. Single Deploymen
 ## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph cluster["Kubernetes cluster"]
-        repoCR[Repository CR]
-        repoCtrl[RepositoryController]
-        issueCR[Issue CR]
-        issueCtrl[IssueController]
-        pvc[(Workspace PVC)]
-        prep[prep Job]
-        agent[agent Pod]
-        publish[publish Job]
-        cm[(agent-log ConfigMap)]
-    end
-    ghIssues((GitHub<br/>Issues API))
-    ghRepo((GitHub<br/>Repos API))
+flowchart TB
+    operator([operator / human])
+    gh((GitHub API))
 
-    repoCR --> repoCtrl
-    repoCtrl -->|poll every N s| ghIssues
-    repoCtrl -->|owns| issueCR
-    issueCR --> issueCtrl
-    issueCtrl -->|owns| pvc
-    issueCtrl -->|owns| prep
-    issueCtrl -->|owns| agent
-    issueCtrl -->|owns| publish
-    issueCtrl -.->|not owned;<br/>survives Issue cleanup| cm
-    prep -->|clone + checkout| pvc
-    agent -->|reads/writes files| pvc
-    publish -->|reads files| pvc
-    publish -->|push branch +<br/>open PR| ghRepo
+    subgraph cluster["Kubernetes cluster"]
+        direction TB
+
+        subgraph crs["Custom Resources"]
+            direction LR
+            repoCR[Repository CR]
+            issueCR[Issue CR]
+            repoCR -. owns .-> issueCR
+        end
+
+        subgraph mgr["agent-swarm-controller-manager (one Deployment)"]
+            direction LR
+            repoCtrl[RepositoryController]
+            issueCtrl[IssueController]
+        end
+
+        subgraph pipeline["Per-issue pipeline (shared workspace PVC)"]
+            direction LR
+            prep[1. prep Job<br/>clone + checkout]
+            agent[2. agent Pod<br/>opencode run]
+            publish[3. publish Job<br/>commit + push + PR]
+            prep --> agent --> publish
+        end
+
+        cm[(agent-log ConfigMap<br/>survives Issue cleanup)]
+    end
+
+    operator -- declares --> repoCR
+    repoCtrl -- watches --> repoCR
+    repoCtrl -- polls every N s --> gh
+    repoCtrl -- creates/prunes --> issueCR
+
+    issueCtrl -- watches --> issueCR
+    issueCtrl -- drives --> pipeline
+    issueCtrl -- archives logs --> cm
+    issueCtrl -- polls PR merge --> gh
+
+    publish -- push branch + open PR --> gh
 ```
+
+Read top to bottom: a human declares a `Repository`, `RepositoryController` polls GitHub and creates child `Issue`s, `IssueController` drives each `Issue` through a three-stage pipeline that shares one PVC, and the publish stage is the only one with GitHub credentials.
 
 ### Credential boundary
 
@@ -61,44 +77,66 @@ See the file header of [`internal/controller/issue_controller_publish.go`](inter
 
 ## Trigger model
 
-Two things wake the controllers:
+Three distinct trigger types drive the operator. The sequence diagram below is divided into three `Note over` sections, one per trigger.
 
-1. **Polling.** `RepositoryController` requeues itself every `Repository.spec.syncIntervalSeconds` to hit the GitHub Issues API. This is the only path from "an upstream change happened on GitHub" to "the cluster reflects it." Webhooks would shorten this loop but are intentionally out of scope.
-2. **Watches.** `IssueController.SetupWithManager` calls `Owns(Job, Pod)`. Status changes on owned Jobs/Pods produce events that wake the reconciler — so when the prep Job finishes, the controller is poked immediately rather than discovering it on the next poll.
+1. **GitHub-poll trigger** — `RepositoryController` requeues itself every `Repository.spec.syncIntervalSeconds`, lists GitHub's open issues, and writes the diff into the cluster as `Issue` CRs.
+2. **Cluster-watch trigger** — `IssueController.SetupWithManager` calls `Owns(Job, Pod)`. Job/Pod status changes wake the reconciler through the K8s watch stream — the workspace pipeline advances reactively, not by polling.
+3. **PR-poll trigger** — once an Issue lands in `PRCreated`, the reconciler requeues every 30s and asks GitHub whether the PR has merged.
+
+The handoff between triggers is K8s state: trigger 1 ends by creating an `Issue` CR (which trigger 2 watches), trigger 2 ends by writing `status.prUrl` + `phase=PRCreated` (which trigger 3 reacts to).
 
 ### End-to-end sequence
 
 ```mermaid
 sequenceDiagram
-    actor User
+    actor Human
     participant GH as GitHub
-    participant Repo as RepositoryController
-    participant Issue as IssueController
+    participant Repo as RepositoryReconciler
+    participant K8s as K8s API
+    participant Issue as IssueReconciler
     participant Prep as prep Job
     participant Agent as agent Pod
     participant Pub as publish Job
 
-    User->>GH: open issue #N
-    Note over Repo: requeues every<br/>syncIntervalSeconds
-    Repo->>GH: list open issues
-    GH-->>Repo: [...issues]
-    Repo->>Repo: create Issue CR<br/>(name=<repo>-<N>)
-    Note over Issue: watches Issue CR
-    Issue->>Issue: ensure PVC + prep Job
-    Prep->>Prep: git clone + checkout<br/>agent-swarm/issue-N
-    Note over Issue: prep Pod transition<br/>wakes reconciler
-    Issue->>Agent: create agent Pod
-    Agent->>Agent: opencode run --dir /workspace/repo
-    Note over Issue: agent Pod transition<br/>wakes reconciler
-    Issue->>Pub: create publish Job
-    Pub->>GH: JWT → installation token<br/>push branch<br/>POST /pulls
-    GH-->>Pub: PR URL (via terminationMessage)
-    Note over Issue: status.prUrl set,<br/>phase=PRCreated
-    Issue->>GH: poll PR every 30s
-    User->>GH: merge PR
-    Issue->>GH: PR.merged == true
-    Note over Issue: phase=Done →<br/>delete Issue CR →<br/>ownerRefs cascade
+    Note over Repo,K8s: Trigger 1 — GitHub poll (every syncIntervalSeconds)
+    Human->>GH: open issue #N
+    Repo->>GH: GET /issues?state=open
+    GH-->>Repo: [...]
+    Repo->>K8s: create Issue CR (<repo>-N)
+
+    Note over K8s,Pub: Trigger 2 — cluster watch (Owns(Job)+Owns(Pod) wakes IssueReconciler)
+    K8s-->>Issue: Issue CR ADDED
+    Issue->>K8s: create PVC + prep Job
+    K8s-->>Prep: schedule Pod
+    Prep->>Prep: git clone + checkout
+    Prep-->>K8s: Pod Succeeded
+    K8s-->>Issue: prep Pod transition
+    Issue->>K8s: create agent Pod
+    K8s-->>Agent: schedule Pod
+    Agent->>Agent: opencode run
+    Agent-->>K8s: Pod Succeeded
+    K8s-->>Issue: agent Pod transition
+    Issue->>K8s: create publish Job
+    K8s-->>Pub: schedule Pod
+    Pub->>GH: JWT → installation token
+    Pub->>GH: git push branch
+    Pub->>GH: POST /pulls
+    GH-->>Pub: pr.html_url (→ terminationMessage)
+    Pub-->>K8s: Pod Succeeded
+    K8s-->>Issue: publish Pod transition
+    Issue->>K8s: status.prUrl = …, phase = PRCreated
+
+    Note over Issue,GH: Trigger 3 — PR poll (every 30s while PRCreated)
+    Issue->>GH: GET /pulls/M
+    GH-->>Issue: open, not merged
+    Human->>GH: merge PR
+    Issue->>GH: GET /pulls/M
+    GH-->>Issue: merged = true
+    Issue->>K8s: phase = Done, delete Issue CR
+    K8s->>K8s: ownerRefs cascade → PVC, Jobs, Pods deleted
 ```
+
+`K8s` here is the apiserver acting as the message bus — `create` calls fire watch events that other reconcilers receive, which is how trigger 1 hands off to trigger 2 without either reconciler knowing about the other directly.
 
 ### Phase machine
 
