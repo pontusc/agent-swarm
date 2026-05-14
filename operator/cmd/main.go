@@ -122,14 +122,9 @@ func main() {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
-	// If the certificate is not specified, controller-runtime will automatically
-	// generate self-signed certificates for the metrics server. While convenient for development and testing,
-	// this setup is not recommended for production.
-	//
-	// TODO(user): If you enable certManager, uncomment the following lines:
-	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
-	// managed by cert-manager for the metrics server.
-	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
+	// When --metrics-cert-path is unset, controller-runtime falls back to
+	// self-signed certs. Fine for development; production deployments should
+	// front the metrics endpoint with cert-manager (not wired up in this repo).
 	if len(metricsCertPath) > 0 {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
@@ -177,10 +172,20 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "Repository")
 		os.Exit(1)
 	}
+	// AGENT_IMAGE lets deployments override the per-issue agent Pod image
+	// without rebuilding the operator binary. Unset → minikube default.
+	// See config/manager/manager.yaml for the kustomize override seam.
+	agentImage := os.Getenv("AGENT_IMAGE")
+	if agentImage == "" {
+		agentImage = controller.DefaultAgentImage
+	}
+	setupLog.Info("Resolved agent image", "image", agentImage)
+
 	if err := (&controller.IssueReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		KubeClient: kubeClient,
+		AgentImage: agentImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Issue")
 		os.Exit(1)

@@ -1,3 +1,8 @@
+// Workspace-prep phase helpers: owner-resolution, the per-issue PVC, and the
+// short-lived Job that clones the upstream repo and checks out a dedicated
+// branch into that PVC. Drives the Issue from Pending/PreparingWorkspace to
+// WorkspaceReady. State-machine logic lives in issue_controller.go; this file
+// only knows about resource shapes and idempotent ensure-* operations.
 package controller
 
 import (

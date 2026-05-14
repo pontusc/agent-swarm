@@ -111,25 +111,30 @@ func (r *IssueReconciler) reconcilePublish(
 		return ctrl.Result{}, nil
 	}
 
-	issue.Status.Phase = agentswarmv1alpha1.IssuePhasePublishPending
-	issue.Status.PRURL = ""
-	issue.Status.LastError = ""
-	meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+	// Publish job is still running. Avoid writing status on every 10s poll —
+	// conditions stabilize after the first reconcile, so we only PATCH when
+	// something actually changes.
+	changed := setIfChanged(&issue.Status.Phase, agentswarmv1alpha1.IssuePhasePublishPending)
+	changed = setIfChanged(&issue.Status.PRURL, "") || changed
+	changed = setIfChanged(&issue.Status.LastError, "") || changed
+	changed = meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 		Type:               "Published",
 		Status:             metav1.ConditionFalse,
 		Reason:             "Publishing",
 		Message:            "Publishing agent output to GitHub branch",
 		ObservedGeneration: issue.Generation,
-	})
-	meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+	}) || changed
+	changed = meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 		Type:               "PullRequestCreated",
 		Status:             metav1.ConditionFalse,
 		Reason:             "PullRequestPending",
 		Message:            "Waiting for publish job to create pull request",
 		ObservedGeneration: issue.Generation,
-	})
-	if err := r.updateIssueStatus(ctx, issue); err != nil {
-		return ctrl.Result{}, err
+	}) || changed
+	if changed {
+		if err := r.updateIssueStatus(ctx, issue); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil

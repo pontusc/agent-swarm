@@ -17,12 +17,15 @@ import (
 	githubclient "github.com/pontuscurtsson/agent-swarm/operator/internal/github"
 )
 
-// RepositoryReconciler reconciles a Repository object
+// RepositoryReconciler reconciles a Repository object.
+//
+// It is responsible for one thing per Repository CR: poll the upstream GitHub
+// repo every spec.syncIntervalSeconds and reflect the set of open issues as
+// child Issue CRs. The downstream Issue lifecycle (workspace, agent, PR) is
+// owned by IssueReconciler — see issue_controller.go.
 type RepositoryReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// newGitHubClient allows tests to inject a fake client and avoid network calls.
-	newGitHubClient func(creds githubclient.AppCreds) (githubclient.Client, error)
 }
 
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=repositories,verbs=get;list;watch;create;update;patch;delete
@@ -31,15 +34,17 @@ type RepositoryReconciler struct {
 // +kubebuilder:rbac:groups=agentswarm.dev,resources=issues,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Repository object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
+// Reconcile polls GitHub for the Repository's open issues and materializes them
+// as child Issue CRs. Each pass:
 //
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
+//  1. Loads GitHub App credentials from the referenced Secret.
+//  2. Lists open issues via the GitHub API (paginated, PRs filtered out).
+//  3. Creates or updates one Issue CR per open GitHub issue; prunes Issue CRs
+//     whose upstream issue is no longer open.
+//  4. Writes status (LastSyncTime, ObservedIssueCount, Synced condition).
+//
+// Requeues every Repository.spec.syncIntervalSeconds. Polling is the only
+// trigger today; webhook support is Phase 3+ (see CLAUDE.md).
 func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -48,7 +53,7 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	creds, err := r.loadCreds(ctx, &repo)
+	creds, err := loadGitHubAppCreds(ctx, r.Client, repo.Namespace, repo.Spec.SecretRef.Name)
 	if err != nil {
 		if markErr := r.markSyncFailed(ctx, &repo, "SecretLoadError", err.Error()); markErr != nil {
 			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)
@@ -57,13 +62,7 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	newGitHubClient := r.newGitHubClient
-	if newGitHubClient == nil {
-		// Production path: use the real GitHub App-backed client.
-		newGitHubClient = githubclient.NewClient
-	}
-
-	ghClient, err := newGitHubClient(creds)
+	ghClient, err := githubclient.NewClient(creds)
 	if err != nil {
 		if markErr := r.markSyncFailed(ctx, &repo, "ClientInitError", err.Error()); markErr != nil {
 			return ctrl.Result{}, fmt.Errorf("mark sync failed: %w (original error: %v)", markErr, err)

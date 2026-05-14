@@ -1,3 +1,8 @@
+// Status helper for RepositoryReconciler. Every reconcile failure path
+// funnels through markSyncFailed so the Synced=False condition has a
+// consistent shape (Reason names a category; Message carries the operator-
+// visible cause). Apiserver Conflict on the write is swallowed because the
+// next reconcile attempt will retry naturally.
 package controller
 
 import (

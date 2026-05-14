@@ -1,3 +1,11 @@
+// Agent-phase helpers: the per-issue agent Pod that runs OpenCode against
+// the prepared workspace, and the post-run log archival into ConfigMaps so
+// logs outlive the Pod (and the Issue CR itself on Done cleanup).
+//
+// The agent Pod is intentionally credential-starved: it receives only an
+// OpenCode API key and the workspace volume. GitHub App credentials live
+// exclusively in the publisher Pod (issue_controller_publish.go) which
+// runs after the agent has exited.
 package controller
 
 import (
@@ -22,17 +30,26 @@ import (
 )
 
 const (
-	opencodeAgentImage            = "localhost:5000/agent-swarm/agent:latest"
 	opencodeCredentialsSecretName = "opencode-credentials"
 	opencodeCredentialsSecretKey  = "apiKey"
 	defaultOpenCodeModel          = "opencode/gpt-5.4-mini"
 	agentLogChunkBytes            = 768 * 1024
 )
 
+// DefaultAgentImage is the fallback image when the AGENT_IMAGE env var is
+// unset at operator startup. The literal points at the minikube in-cluster
+// registry (see scripts/minikube/start-minikube.sh + the host-side proxy).
+// Non-minikube deployments override AGENT_IMAGE in config/manager/manager.yaml.
+const DefaultAgentImage = "localhost:5000/agent-swarm/agent:latest"
+
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
-// reconcileAgent assigns an agent pod once workspace prep is complete.
-// It tracks pod lifecycle and advances issue phase toward publish handoff.
+// reconcileAgent ensures the agent pod for an Issue exists and advances the
+// Issue's phase based on the pod's lifecycle. The pod-running branch is
+// invoked every 10s while the agent works; status writes there are gated by
+// `changed` so we don't generate API churn on every wakeup. The terminal
+// branches (succeeded/failed) always write because they represent a real
+// state transition.
 func (r *IssueReconciler) reconcileAgent(
 	ctx context.Context,
 	issue *agentswarmv1alpha1.Issue,
@@ -44,9 +61,12 @@ func (r *IssueReconciler) reconcileAgent(
 		return ctrl.Result{}, err
 	}
 
-	issue.Status.PrepRetries = 0
-	issue.Status.AgentPodName = pod.Name
-	issue.Status.LastError = ""
+	// PrepRetries / AgentPodName / LastError are scalar status fields we want
+	// to reflect the current run. Track whether any actually changed so the
+	// pod-running branch can skip a redundant Status().Update().
+	changed := setIfChanged(&issue.Status.PrepRetries, 0)
+	changed = setIfChanged(&issue.Status.AgentPodName, pod.Name) || changed
+	changed = setIfChanged(&issue.Status.LastError, "") || changed
 
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
@@ -91,26 +111,39 @@ func (r *IssueReconciler) reconcileAgent(
 		}
 		return ctrl.Result{}, nil
 	default:
-		issue.Status.Phase = agentswarmv1alpha1.IssuePhaseAgentRunning
-		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+		changed = setIfChanged(&issue.Status.Phase, agentswarmv1alpha1.IssuePhaseAgentRunning) || changed
+		changed = meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 			Type:               "WorkspacePrepared",
 			Status:             metav1.ConditionTrue,
 			Reason:             "WorkspaceReady",
 			Message:            "Workspace prepared and branch checked out",
 			ObservedGeneration: issue.Generation,
-		})
-		meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
+		}) || changed
+		changed = meta.SetStatusCondition(&issue.Status.Conditions, metav1.Condition{
 			Type:               "AgentCompleted",
 			Status:             metav1.ConditionFalse,
 			Reason:             "AgentRunning",
 			Message:            "Agent pod is running",
 			ObservedGeneration: issue.Generation,
-		})
-		if err := r.updateIssueStatus(ctx, issue); err != nil {
-			return ctrl.Result{}, err
+		}) || changed
+		if changed {
+			if err := r.updateIssueStatus(ctx, issue); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+}
+
+// setIfChanged writes value to *field and returns true iff the previous value
+// differed. Used to gate status writes — the apiserver would no-op identical
+// updates, but the round-trip itself is what we're avoiding.
+func setIfChanged[T comparable](field *T, value T) bool {
+	if *field == value {
+		return false
+	}
+	*field = value
+	return true
 }
 
 // ensureAgentPod creates (or reuses) the agent pod that mounts the prepared
@@ -138,7 +171,7 @@ func (r *IssueReconciler) ensureAgentPod(ctx context.Context, issue *agentswarmv
 			Containers: []corev1.Container{
 				{
 					Name:            "agent",
-					Image:           opencodeAgentImage,
+					Image:           r.AgentImage,
 					ImagePullPolicy: corev1.PullAlways,
 					Env: []corev1.EnvVar{
 						{Name: "AGENT_WORKSPACE", Value: "/workspace/repo"},
@@ -215,12 +248,20 @@ func (r *IssueReconciler) persistAgentLogConfigMaps(ctx context.Context, issue *
 	return nil
 }
 
-func (r *IssueReconciler) readPodLogs(ctx context.Context, namespace string, podName string) (string, error) {
+// readPodLogs streams the agent pod's stdout/stderr and returns it as a string.
+// Named return so the deferred Close can surface a close error when the read
+// itself succeeded — otherwise the read error wins and the close error is
+// suppressed (it would just be noise on a body we already consumed).
+func (r *IssueReconciler) readPodLogs(ctx context.Context, namespace, podName string) (out string, retErr error) {
 	stream, err := r.KubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{}).Stream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("stream logs for pod %q/%q: %w", namespace, podName, err)
 	}
-	defer stream.Close()
+	defer func() {
+		if cerr := stream.Close(); cerr != nil && retErr == nil {
+			retErr = fmt.Errorf("close log stream for %q/%q: %w", namespace, podName, cerr)
+		}
+	}()
 
 	logBytes, err := io.ReadAll(stream)
 	if err != nil {
@@ -293,10 +334,7 @@ func splitLogOutput(output string, chunkSize int) []string {
 
 	parts := make([]string, 0, (len(output)/chunkSize)+1)
 	for start := 0; start < len(output); start += chunkSize {
-		end := start + chunkSize
-		if end > len(output) {
-			end = len(output)
-		}
+		end := min(start+chunkSize, len(output))
 		parts = append(parts, output[start:end])
 	}
 
@@ -312,10 +350,7 @@ func agentLogConfigMapBaseName(issue *agentswarmv1alpha1.Issue) string {
 
 	hash := sha1.Sum([]byte(base))
 	suffix := hex.EncodeToString(hash[:4])
-	prefixLength := maxLength - len(suffix) - 1
-	if prefixLength < 1 {
-		prefixLength = 1
-	}
+	prefixLength := max(maxLength-len(suffix)-1, 1)
 
 	return fmt.Sprintf("%s-%s", base[:prefixLength], suffix)
 }

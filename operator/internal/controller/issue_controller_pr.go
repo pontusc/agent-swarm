@@ -1,3 +1,9 @@
+// PR-tracking phase: once the publisher Job opens a pull request and writes
+// the URL to Issue.status.prUrl, the Issue parks here in PRCreated. This
+// file polls GitHub for the PR's merge state and transitions the Issue to
+// Done (on merge) or Failed (on close-without-merge). Polling cadence is
+// pullRequestStatusPollInterval; condition writes are change-gated so the
+// 30s loop only touches the apiserver on real transitions.
 package controller
 
 import (
@@ -8,11 +14,8 @@ import (
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	agentswarmv1alpha1 "github.com/pontuscurtsson/agent-swarm/operator/api/v1alpha1"
@@ -63,17 +66,12 @@ func (r *IssueReconciler) reconcilePullRequestStatus(
 		return ctrl.Result{}, nil
 	}
 
-	creds, err := r.loadRepositoryCreds(ctx, repo)
+	creds, err := loadGitHubAppCreds(ctx, r.Client, repo.Namespace, repo.Spec.SecretRef.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	newGitHubClient := r.newGitHubClient
-	if newGitHubClient == nil {
-		newGitHubClient = githubclient.NewClient
-	}
-
-	ghClient, err := newGitHubClient(creds)
+	ghClient, err := githubclient.NewClient(creds)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("create GitHub client: %w", err)
 	}
@@ -159,44 +157,6 @@ func (r *IssueReconciler) reconcilePullRequestStatus(
 	}
 
 	return ctrl.Result{RequeueAfter: pullRequestStatusPollInterval}, nil
-}
-
-// loadRepositoryCreds reads GitHub App credentials from the Secret referenced
-// by the owning Repository.
-func (r *IssueReconciler) loadRepositoryCreds(ctx context.Context, repo *agentswarmv1alpha1.Repository) (githubclient.AppCreds, error) {
-	secretName := types.NamespacedName{Namespace: repo.Namespace, Name: repo.Spec.SecretRef.Name}
-
-	var secret corev1.Secret
-	if err := r.Get(ctx, secretName, &secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return githubclient.AppCreds{}, fmt.Errorf("secret %q not found", secretName.String())
-		}
-		return githubclient.AppCreds{}, fmt.Errorf("get secret %q: %w", secretName.String(), err)
-	}
-
-	appID, err := parseRequiredInt64(secret.Data, "appId")
-	if err != nil {
-		return githubclient.AppCreds{}, fmt.Errorf("secret %q: %w", secretName.String(), err)
-	}
-
-	installationID, err := parseRequiredInt64(secret.Data, "installationId")
-	if err != nil {
-		return githubclient.AppCreds{}, fmt.Errorf("secret %q: %w", secretName.String(), err)
-	}
-
-	privateKeyPEM, ok := secret.Data["privateKey"]
-	if !ok {
-		return githubclient.AppCreds{}, fmt.Errorf("missing key %q", "privateKey")
-	}
-	if len(privateKeyPEM) == 0 {
-		return githubclient.AppCreds{}, fmt.Errorf("key %q must not be empty", "privateKey")
-	}
-
-	return githubclient.AppCreds{
-		AppID:          appID,
-		InstallationID: installationID,
-		PrivateKeyPEM:  privateKeyPEM,
-	}, nil
 }
 
 // pullRequestNumberFromURL extracts the numeric PR id from a GitHub PR URL.

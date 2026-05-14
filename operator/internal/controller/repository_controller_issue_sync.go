@@ -1,3 +1,9 @@
+// Issue-CR diffing for RepositoryReconciler. Given the latest snapshot of
+// open GitHub issues from internal/github, syncIssues makes the cluster
+// match: upsert one Issue CR per open issue and prune any that no longer
+// appear. Closed-on-GitHub issues fall out via prune (they don't appear in
+// the open-only API response), which is also the README-documented cleanup
+// policy.
 package controller
 
 import (
@@ -41,23 +47,14 @@ func (r *RepositoryReconciler) syncIssues(ctx context.Context, repo *agentswarmv
 
 // upsertIssue keeps one deterministic Issue CR (<repository-name>-<issue-number>)
 // in sync with the latest GitHub issue payload.
+//
+// Assumes the issue is Open — syncIssues filters closed issues before calling
+// this. Closed-issue cleanup happens via pruneOutdatedIssues below: a closed
+// issue won't appear in the open-only API response, so it falls out of the
+// desiredNames set and gets deleted in the prune pass.
 func (r *RepositoryReconciler) upsertIssue(ctx context.Context, repo *agentswarmv1alpha1.Repository, issue githubclient.Issue) error {
 	name := fmt.Sprintf("%s-%d", repo.Name, issue.Number)
 	nn := types.NamespacedName{Namespace: repo.Namespace, Name: name}
-
-	if toIssueState(issue.State) != agentswarmv1alpha1.IssueStateOpen {
-		var existing agentswarmv1alpha1.Issue
-		if err := r.Get(ctx, nn, &existing); err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil
-			}
-			return fmt.Errorf("get Issue %q for closed-state cleanup: %w", nn.String(), err)
-		}
-		if err := r.Delete(ctx, &existing); err != nil {
-			return fmt.Errorf("delete closed Issue %q: %w", nn.String(), err)
-		}
-		return nil
-	}
 
 	desiredSpec := agentswarmv1alpha1.IssueSpec{
 		Number: issue.Number,

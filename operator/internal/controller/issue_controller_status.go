@@ -1,3 +1,8 @@
+// Status-write helpers for the Issue reconciler. Any phase that needs to
+// terminate the Issue with Failed goes through markIssueFailed so the
+// WorkspacePrepared condition shape is consistent regardless of where the
+// failure originated; updateIssueStatus centralizes the "conflict is
+// retryable" handling used by every other write path in this package.
 package controller
 
 import (

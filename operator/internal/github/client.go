@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	gogithub "github.com/google/go-github/v86/github"
@@ -80,6 +81,11 @@ func fromGoGitHub(i *gogithub.Issue) Issue {
 			labels = append(labels, name)
 		}
 	}
+	// Sort labels so reconcile's reflect.DeepEqual on IssueSpec is stable across
+	// polls. GitHub's REST API does not guarantee label order, and an unstable
+	// order would trigger spurious Issue CR updates every reconcile.
+	sort.Strings(labels)
+
 	state := "Open"
 	if i.GetState() == "closed" {
 		state = "Closed"
